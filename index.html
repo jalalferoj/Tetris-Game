@@ -29,6 +29,7 @@
             align-items: center;
             justify-content: center;
             height: 100vh;
+            width: 100vw;
             overflow: hidden;
         }
 
@@ -37,9 +38,10 @@
             display: flex;
             flex-direction: column;
             align-items: center;
+            justify-content: space-between;
             width: 100%;
-            max-width: 500px;
             height: 100%;
+            padding-bottom: 20px; /* Safe area for bottom */
         }
 
         header {
@@ -48,30 +50,43 @@
             justify-content: space-between;
             padding: 10px 20px;
             background: rgba(0,0,0,0.2);
-            font-size: 1.2rem;
+            font-size: 1.5rem; /* Larger text */
             font-weight: bold;
+            flex-shrink: 0;
             z-index: 10;
         }
 
+        /* The wrapper will grow to fill space between header and controls */
         #canvas-wrapper {
             position: relative;
-            margin: 10px 0;
-            border: 4px solid #34495e;
-            border-radius: 8px;
-            background-color: var(--game-bg);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+            flex-grow: 1; 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            overflow: hidden;
+            padding: 10px;
         }
 
         canvas {
             display: block;
+            border: 4px solid #34495e;
+            border-radius: 4px;
+            background-color: var(--game-bg);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+            /* Max width constraints to keep it playable on ultra-wide desktop */
+            max-width: 90vw;
         }
 
         /* Overlay for Game Over / Start */
         #overlay {
             position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            /* Overlay matches canvas size strictly via JS now, 
+               but fallback to covering wrapper if needed */
+            width: 100%; 
             height: 100%;
             background: rgba(0, 0, 0, 0.85);
             display: flex;
@@ -91,6 +106,7 @@
             color: #f1c40f;
             margin-bottom: 10px;
             text-shadow: 2px 2px #e67e22;
+            text-align: center;
         }
 
         #overlay p {
@@ -117,23 +133,24 @@
 
         /* Controls Area */
         #controls {
-            flex-grow: 1;
+            flex-shrink: 0; /* Prevent controls from squishing */
             width: 100%;
+            max-width: 600px; /* Limit width on desktop */
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
             grid-template-rows: 1fr 1fr;
-            gap: 15px;
-            padding: 10px 20px 20px 20px;
-            max-height: 250px;
+            gap: 10px;
+            padding: 0 15px;
+            height: auto;
         }
 
         .control-btn {
             background-color: var(--btn-bg);
             border: none;
-            border-radius: 15px;
+            border-radius: 12px;
             font-size: 2rem;
             color: #333;
-            box-shadow: 0 6px var(--btn-shadow);
+            box-shadow: 0 5px var(--btn-shadow);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -141,6 +158,7 @@
             transition: all 0.1s;
             user-select: none;
             -webkit-user-select: none;
+            padding: 15px 0; /* Taller buttons */
         }
 
         .control-btn:active {
@@ -160,13 +178,36 @@
             color: white;
             border-bottom: 5px solid #2980b9;
         }
-        
-        /* Icon styling */
-        .icon { pointer-events: none; }
 
-        @media (min-width: 600px) {
+        /* Adjustments for landscape mobile */
+        @media (max-height: 500px) and (orientation: landscape) {
+            #game-container {
+                flex-direction: row;
+                align-items: center;
+            }
             #controls {
-                max-width: 400px;
+                width: 180px;
+                grid-template-columns: 1fr;
+                grid-template-rows: repeat(4, 1fr);
+                height: 100%;
+                gap: 5px;
+                max-height: 100vh;
+                padding: 10px;
+            }
+            /* Rearrange buttons for side controls */
+            #btn-rotate { grid-column: 1; grid-row: 1; }
+            #btn-left { grid-column: 1; grid-row: 2; }
+            #btn-down { grid-column: 1; grid-row: 3; }
+            #btn-right { grid-column: 1; grid-row: 4; }
+            
+            header {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: auto;
+                background: transparent;
+                flex-direction: column;
+                gap: 10px;
             }
         }
     </style>
@@ -180,7 +221,7 @@
     </header>
 
     <div id="canvas-wrapper">
-        <canvas id="tetris" width="240" height="400"></canvas>
+        <canvas id="tetris"></canvas>
         
         <div id="overlay">
             <h1 id="title-text">BLOCKS</h1>
@@ -204,9 +245,15 @@
 <script>
     const canvas = document.getElementById('tetris');
     const context = canvas.getContext('2d');
+    const wrapper = document.getElementById('canvas-wrapper');
+    const overlay = document.getElementById('overlay');
+
+    // Game Logic Constants
+    const COLS = 12;
+    const ROWS = 20;
     
-    // Scale up everything 20x
-    context.scale(20, 20);
+    // Scale variable, updated on resize
+    let scale = 20; 
 
     // Game State
     let dropCounter = 0;
@@ -227,13 +274,50 @@
         '#3877FF', // J - Blue
     ];
 
-    const arena = createMatrix(12, 20);
+    const arena = createMatrix(COLS, ROWS);
 
     const player = {
         pos: {x: 0, y: 0},
         matrix: null,
         score: 0,
     };
+
+    function resizeGame() {
+        // Calculate available space
+        const wrapperWidth = wrapper.clientWidth;
+        const wrapperHeight = wrapper.clientHeight;
+
+        // Calculate scale based on the limiting dimension (width or height)
+        // We subtract a little padding (20px) to ensure borders don't get cut off
+        const scaleX = (wrapperWidth - 20) / COLS;
+        const scaleY = (wrapperHeight - 20) / ROWS;
+        
+        // Use the smaller scale to fit the whole board
+        scale = Math.floor(Math.min(scaleX, scaleY));
+        
+        // Ensure minimum scale for visibility
+        if (scale < 10) scale = 10;
+
+        // Update Canvas size
+        canvas.width = scale * COLS;
+        canvas.height = scale * ROWS;
+
+        // Update Overlay size to match canvas exactly
+        overlay.style.width = canvas.width + 'px';
+        overlay.style.height = canvas.height + 'px';
+
+        // Apply scale to context
+        context.setTransform(1, 0, 0, 1, 0, 0); // Reset transform
+        context.scale(scale, scale);
+
+        draw();
+    }
+
+    // Resize listener
+    window.addEventListener('resize', resizeGame);
+    // Initial call after slight delay to ensure layout is computed
+    setTimeout(resizeGame, 0);
+
 
     function createMatrix(w, h) {
         const matrix = [];
@@ -292,13 +376,14 @@
     function draw() {
         // Clear screen with black
         context.fillStyle = '#000';
-        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillRect(0, 0, COLS, ROWS); // Use logical coordinates since we scaled
 
         drawMatrix(arena, {x: 0, y: 0});
         drawMatrix(player.matrix, player.pos);
     }
 
     function drawMatrix(matrix, offset) {
+        if (!matrix) return;
         matrix.forEach((row, y) => {
             row.forEach((value, x) => {
                 if (value !== 0) {
@@ -456,6 +541,7 @@
     }
 
     function startGame() {
+        resizeGame(); // Ensure size is correct on start
         arena.forEach(row => row.fill(0));
         player.score = 0;
         level = 1;
@@ -473,12 +559,15 @@
         
         if (event.keyCode === 37) { // Left
             playerMove(-1);
+            draw();
         } else if (event.keyCode === 39) { // Right
             playerMove(1);
+            draw();
         } else if (event.keyCode === 40) { // Down
             playerDrop();
         } else if (event.keyCode === 38) { // Up (Rotate)
             playerRotate(1);
+            draw();
         } else if (event.keyCode === 32) { // Space (Pause/Start safety)
             // Optional: Pause logic could go here
         }
@@ -491,22 +580,25 @@
         // Handle Mouse
         btn.addEventListener('mousedown', (e) => {
             e.preventDefault();
-            if(gameRunning) action();
+            if(gameRunning) {
+                action();
+                draw(); // Immediate feedback
+            }
         });
 
         // Handle Touch (prevent default to stop zoom/scroll)
         btn.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            if(gameRunning) action();
+            if(gameRunning) {
+                action();
+                draw(); // Immediate feedback
+            }
         }, {passive: false});
     }
 
     attachControl('btn-left', () => playerMove(-1));
     attachControl('btn-right', () => playerMove(1));
     attachControl('btn-rotate', () => playerRotate(1));
-    
-    // For Down button, we want it to move faster if held, but for simplicity
-    // we will just make it single tap drop for kids
     attachControl('btn-down', () => playerDrop());
 
 </script>
